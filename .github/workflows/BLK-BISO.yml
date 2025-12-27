@@ -1,0 +1,187 @@
+name: Build Linux Kernel & Build ISO Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_version:
+        description: "内核版本 (例如: 6.12.6, 6.6.9). 必须是 kernel.org 存在的稳定版。"
+        required: true
+        default: "6.12.6"
+      
+      # --- 五项关键配置 ---
+      enable_bbr:
+        description: "1. 启用 Google BBR TCP 拥塞控制"
+        type: boolean
+        required: false
+        default: true
+      
+      enable_kvm:
+        description: "2. 启用 KVM 虚拟化支持"
+        type: boolean
+        required: false
+        default: true
+
+      enable_ntfs3:
+        description: "3. 启用原生 NTFS3 文件系统"
+        type: boolean
+        required: false
+        default: true
+
+      preempt_mode:
+        description: "4. 调度模式: 勾选为【低延迟桌面模式】，不勾选为【服务器吞吐量模式】"
+        type: boolean
+        required: false
+        default: true
+
+      disable_btf:
+        description: "5. 【救援模式】禁用 BTF 调试信息"
+        type: boolean
+        required: false
+        default: false
+
+jobs:
+  # --- 任务 1: 编译内核 (保留原代码逻辑) ---
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize Arch Linux Keyring
+        run: |
+          pacman-key --init
+          pacman-key --populate archlinux
+          pacman -Syu --noconfirm archlinux-keyring
+
+      - name: Install Build Dependencies
+        run: |
+          pacman -Syu --noconfirm base-devel git bc flex bison openssl libelf pahole \
+            wget tar xz curl ncurses zstd lz4 gmp rsync perl python3 elfutils cpio kmod
+
+      - name: Download and Extract Linux Source
+        run: |
+          VERSION="${{ github.event.inputs.kernel_version }}"
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          URL="https://cdn.kernel.org/pub/linux/kernel/v${MAJOR}.x/linux-${VERSION}.tar.xz"
+          if ! curl -f -I "$URL" > /dev/null 2>&1; then
+             echo "错误: 在 kernel.org 找不到版本 $VERSION"
+             exit 1
+          fi
+          curl -f -LO "$URL"
+          mkdir -p workdir
+          tar -xf "linux-${VERSION}.tar.xz" -C workdir --strip-components=1
+          rm "linux-${VERSION}.tar.xz"
+
+      - name: Configure Kernel (Custom Options)
+        run: |
+          cd workdir
+          make defconfig
+          if [[ "${{ github.event.inputs.enable_bbr }}" == "true" ]]; then
+            ./scripts/config --enable CONFIG_TCP_CONG_BBR
+            ./scripts/config --enable CONFIG_DEFAULT_TCP_CONG_BBR
+            ./scripts/config --set-str CONFIG_DEFAULT_TCP_CONG "bbr"
+          fi
+          if [[ "${{ github.event.inputs.enable_kvm }}" == "true" ]]; then
+            ./scripts/config --enable CONFIG_KVM --enable CONFIG_KVM_INTEL --enable CONFIG_KVM_AMD
+          fi
+          if [[ "${{ github.event.inputs.enable_ntfs3 }}" == "true" ]]; then
+            ./scripts/config --enable CONFIG_NTFS3_FS --enable CONFIG_NTFS3_LZX_XPRESS
+          fi
+          if [[ "${{ github.event.inputs.preempt_mode }}" == "true" ]]; then
+            ./scripts/config --disable CONFIG_PREEMPT_VOLUNTARY --disable CONFIG_PREEMPT_NONE --enable CONFIG_PREEMPT --enable CONFIG_PREEMPT_DYNAMIC
+          else
+            ./scripts/config --disable CONFIG_PREEMPT --enable CONFIG_PREEMPT_VOLUNTARY
+          fi
+          if [[ "${{ github.event.inputs.disable_btf }}" == "true" ]]; then
+            ./scripts/config --disable CONFIG_DEBUG_INFO_BTF --disable CONFIG_DEBUG_INFO
+          else
+            ./scripts/config --enable CONFIG_DEBUG_INFO_BTF
+          fi
+          ./scripts/config --disable CONFIG_WERROR
+          make olddefconfig
+
+      - name: Build Kernel
+        run: |
+          cd workdir
+          make -j$(nproc) all
+
+      - name: Prepare Artifacts
+        run: |
+          VERSION="${{ github.event.inputs.kernel_version }}"
+          cd workdir
+          mkdir -p ../artifacts
+          cp arch/x86/boot/bzImage "../artifacts/linux-${VERSION}.bzImage"
+          cp arch/x86/boot/bzImage "../artifacts/linux-${VERSION}.img"
+          make modules_install INSTALL_MOD_PATH=../pkg_modules
+          make headers_install INSTALL_HDR_PATH=../pkg_headers
+          cd ..
+          tar -czf "artifacts/linux-${VERSION}-modules.tar.gz" -C pkg_modules .
+          tar -czf "artifacts/linux-${VERSION}-headers.tar.gz" -C pkg_headers .
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.event.inputs.kernel_version }}
+          name: "Linux ${{ github.event.inputs.kernel_version }} (Custom Build)"
+          body: |
+            Custom build of Linux Kernel ${{ github.event.inputs.kernel_version }}
+            - BBR: ${{ github.event.inputs.enable_bbr }}
+            - KVM: ${{ github.event.inputs.enable_kvm }}
+            - NTFS3: ${{ github.event.inputs.enable_ntfs3 }}
+            - Low Latency: ${{ github.event.inputs.preempt_mode }}
+          files: artifacts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Export for ISO Job
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-data
+          path: |
+            artifacts/linux-${{ github.event.inputs.kernel_version }}.bzImage
+            pkg_modules/
+
+  # --- 任务 2: 制作 Arch ISO (子工作流) ---
+  make_iso:
+    needs: build
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+      options: --privileged
+    steps:
+      - name: Init Keyring & Install Archiso
+        run: |
+          pacman-key --init
+          pacman-key --populate archlinux
+          pacman -Syu --noconfirm archlinux-keyring archiso squashfs-tools
+
+      - name: Download Kernel Data
+        uses: actions/download-artifact@v4
+        with:
+          name: kernel-data
+
+      - name: Build Custom ISO
+        run: |
+          VERSION="${{ github.event.inputs.kernel_version }}"
+          cp -r /usr/share/archiso/configs/releng/ iso_profile
+          cd iso_profile
+          # 替换为自定义内核
+          sed -i '/^linux$/d' packages.x86_64
+          cp ../artifacts/linux-${VERSION}.bzImage airootfs/boot/vmlinuz-linux
+          # 注入模块
+          mkdir -p airootfs/usr/lib/modules/
+          cp -r ../lib/modules/* airootfs/usr/lib/modules/
+          # 运行构建
+          cd ..
+          mkarchiso -v -w work_dir -o out iso_profile
+
+      - name: Upload ISO to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.event.inputs.kernel_version }}
+          files: out/*.iso
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
