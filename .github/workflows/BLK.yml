@@ -197,26 +197,3 @@ jobs:
           files: artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload to 123 Cloud via WebDAV
-        run: |
-          VERSION="${{ github.event.inputs.kernel_version }}"
-          WEBDAV_URL="https://webdav.123pan.cn/webdav/arch"
-          
-          upload_file() {
-            FILE_PATH=$1
-            REMOTE_NAME=$2
-            echo "Uploading $REMOTE_NAME ..."
-            # -f: 失败时报错
-            # --create-dirs: 自动创建远程目录
-            # --retry: 重试3次
-            curl -f --create-dirs --retry 3 --retry-delay 5 \
-              -u "${{ secrets.WEBDAV_USER }}:${{ secrets.WEBDAV_PASS }}" \
-              -T "$FILE_PATH" \
-              "$WEBDAV_URL/$REMOTE_NAME"
-          }
-
-          upload_file "artifacts/linux-${VERSION}.bzImage" "linux-${VERSION}-bzImage"
-          upload_file "artifacts/linux-${VERSION}.img" "linux-${VERSION}.img"
-          upload_file "artifacts/linux-${VERSION}-modules.tar.gz" "linux-${VERSION}-modules.tar.gz"
-          upload_file "artifacts/linux-${VERSION}-headers.tar.gz" "linux-${VERSION}-headers.tar.gz"
