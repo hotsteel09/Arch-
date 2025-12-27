@@ -1,0 +1,222 @@
+name: Build Linux Kernel (Custom Config)
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_version:
+        description: "内核版本 (例如: 6.12.6, 6.6.9). 必须是 kernel.org 存在的稳定版。"
+        required: true
+        default: "6.12.6"
+      
+      # --- 五项关键配置 ---
+      enable_bbr:
+        description: "1. 启用 Google BBR TCP 拥塞控制 (提升网络吞吐量)"
+        type: boolean
+        required: false
+        default: true
+      
+      enable_kvm:
+        description: "2. 启用 KVM 虚拟化支持 (Intel/AMD)"
+        type: boolean
+        required: false
+        default: true
+
+      enable_ntfs3:
+        description: "3. 启用原生 NTFS3 文件系统 (高性能读写 Windows 分区)"
+        type: boolean
+        required: false
+        default: true
+
+      preempt_mode:
+        description: "4. 调度模式: 勾选为【低延迟桌面模式】，不勾选为【服务器吞吐量模式】"
+        type: boolean
+        required: false
+        default: true
+
+      disable_btf:
+        description: "5. 【救援模式】禁用 BTF 调试信息 (若编译失败，请勾选此项重试)"
+        type: boolean
+        required: false
+        default: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize Arch Linux Keyring
+        run: |
+          # 修复 Arch 容器的签名密钥问题，防止 pacman 报错
+          pacman-key --init
+          pacman-key --populate archlinux
+          pacman -Syu --noconfirm archlinux-keyring
+
+      - name: Install Build Dependencies
+        run: |
+          # 安装全套编译环境
+          # pahole: 处理 BTF 信息
+          # bc, cpio, kmod, perl: 内核构建核心工具
+          pacman -Syu --noconfirm base-devel git bc flex bison openssl libelf pahole \
+            wget tar xz curl ncurses zstd lz4 gmp rsync perl python3 elfutils cpio kmod
+
+      - name: Download and Extract Linux Source
+        run: |
+          VERSION="${{ github.event.inputs.kernel_version }}"
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          URL="https://cdn.kernel.org/pub/linux/kernel/v${MAJOR}.x/linux-${VERSION}.tar.xz"
+          
+          echo "Target Version: $VERSION"
+          
+          # 检查链接是否有效，无效则报错退出
+          if ! curl -f -I "$URL" > /dev/null 2>&1; then
+             echo "错误: 在 kernel.org 找不到版本 $VERSION"
+             exit 1
+          fi
+          
+          echo "Downloading..."
+          curl -f -LO "$URL"
+          
+          # 创建工作目录并解压 (稳健模式)
+          mkdir -p workdir
+          tar -xf "linux-${VERSION}.tar.xz" -C workdir --strip-components=1
+          rm "linux-${VERSION}.tar.xz"
+
+      - name: Configure Kernel (Custom Options)
+        run: |
+          cd workdir
+          
+          echo "生成基础配置..."
+          make defconfig
+
+          echo "应用用户自定义配置..."
+          # 使用 scripts/config 工具修改 .config 文件
+          
+          # 1. BBR 设置
+          if [[ "${{ github.event.inputs.enable_bbr }}" == "true" ]]; then
+            echo "-> Enabling BBR..."
+            ./scripts/config --enable CONFIG_TCP_CONG_BBR
+            ./scripts/config --enable CONFIG_DEFAULT_TCP_CONG_BBR
+            ./scripts/config --set-str CONFIG_DEFAULT_TCP_CONG "bbr"
+          fi
+
+          # 2. KVM 设置
+          if [[ "${{ github.event.inputs.enable_kvm }}" == "true" ]]; then
+            echo "-> Enabling KVM..."
+            ./scripts/config --enable CONFIG_KVM
+            ./scripts/config --enable CONFIG_KVM_INTEL
+            ./scripts/config --enable CONFIG_KVM_AMD
+          fi
+
+          # 3. NTFS3 设置
+          if [[ "${{ github.event.inputs.enable_ntfs3 }}" == "true" ]]; then
+            echo "-> Enabling NTFS3..."
+            ./scripts/config --enable CONFIG_NTFS3_FS
+            ./scripts/config --enable CONFIG_NTFS3_LZX_XPRESS
+          fi
+
+          # 4. 抢占模式 (Preemption)
+          if [[ "${{ github.event.inputs.preempt_mode }}" == "true" ]]; then
+            echo "-> 设置为低延迟桌面模式 (PREEMPT)..."
+            ./scripts/config --disable CONFIG_PREEMPT_VOLUNTARY
+            ./scripts/config --disable CONFIG_PREEMPT_NONE
+            ./scripts/config --enable CONFIG_PREEMPT
+            ./scripts/config --enable CONFIG_PREEMPT_DYNAMIC
+          else
+            echo "-> 设置为服务器吞吐量模式 (PREEMPT_VOLUNTARY)..."
+            ./scripts/config --disable CONFIG_PREEMPT
+            ./scripts/config --enable CONFIG_PREEMPT_VOLUNTARY
+          fi
+
+          # 5. BTF 调试信息 (救援开关)
+          if [[ "${{ github.event.inputs.disable_btf }}" == "true" ]]; then
+            echo "-> 禁用 DEBUG_INFO_BTF (减少体积，提高成功率)..."
+            ./scripts/config --disable CONFIG_DEBUG_INFO_BTF
+            ./scripts/config --disable CONFIG_DEBUG_INFO
+          else
+            # 默认确保开启，但也确保 pahole 依赖存在
+            ./scripts/config --enable CONFIG_DEBUG_INFO_BTF
+          fi
+
+          # --- 关键：强制修改以确保编译成功 ---
+          # 关闭将警告视为错误的选项，防止因编译器版本过新导致的误报中断编译
+          ./scripts/config --disable CONFIG_WERROR
+          
+          # 更新配置，解决依赖冲突
+          make olddefconfig
+
+      - name: Build Kernel
+        run: |
+          cd workdir
+          echo "开始编译 (线程数: $(nproc))..."
+          # 编译 bzImage 和 modules
+          make -j$(nproc) all
+
+      - name: Prepare Artifacts
+        run: |
+          VERSION="${{ github.event.inputs.kernel_version }}"
+          cd workdir
+          
+          mkdir -p ../artifacts
+          
+          # 复制内核镜像
+          cp arch/x86/boot/bzImage "../artifacts/linux-${VERSION}.bzImage"
+          cp arch/x86/boot/bzImage "../artifacts/linux-${VERSION}.img"
+
+          # 安装模块和头文件到临时目录
+          make modules_install INSTALL_MOD_PATH=../pkg_modules
+          make headers_install INSTALL_HDR_PATH=../pkg_headers
+          
+          cd ..
+          
+          # 打包
+          tar -czf "artifacts/linux-${VERSION}-modules.tar.gz" -C pkg_modules .
+          tar -czf "artifacts/linux-${VERSION}-headers.tar.gz" -C pkg_headers .
+          
+          echo "产物列表:"
+          ls -lh artifacts/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.event.inputs.kernel_version }}
+          name: "Linux ${{ github.event.inputs.kernel_version }} (Custom Build)"
+          body: |
+            Custom build of Linux Kernel ${{ github.event.inputs.kernel_version }}
+            
+            **Configuration:**
+            - BBR: ${{ github.event.inputs.enable_bbr }}
+            - KVM: ${{ github.event.inputs.enable_kvm }}
+            - NTFS3: ${{ github.event.inputs.enable_ntfs3 }}
+            - Low Latency: ${{ github.event.inputs.preempt_mode }}
+            - BTF Disabled: ${{ github.event.inputs.disable_btf }}
+          files: artifacts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload to 123 Cloud via WebDAV
+        run: |
+          VERSION="${{ github.event.inputs.kernel_version }}"
+          WEBDAV_URL="https://webdav.123pan.cn/webdav/arch"
+          
+          upload_file() {
+            FILE_PATH=$1
+            REMOTE_NAME=$2
+            echo "Uploading $REMOTE_NAME ..."
+            # -f: 失败时报错
+            # --create-dirs: 自动创建远程目录
+            # --retry: 重试3次
+            curl -f --create-dirs --retry 3 --retry-delay 5 \
+              -u "${{ secrets.WEBDAV_USER }}:${{ secrets.WEBDAV_PASS }}" \
+              -T "$FILE_PATH" \
+              "$WEBDAV_URL/$REMOTE_NAME"
+          }
+
+          upload_file "artifacts/linux-${VERSION}.bzImage" "linux-${VERSION}-bzImage"
+          upload_file "artifacts/linux-${VERSION}.img" "linux-${VERSION}.img"
+          upload_file "artifacts/linux-${VERSION}-modules.tar.gz" "linux-${VERSION}-modules.tar.gz"
+          upload_file "artifacts/linux-${VERSION}-headers.tar.gz" "linux-${VERSION}-headers.tar.gz"
