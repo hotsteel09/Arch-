@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       kernel_version:
-        description: "Enter stable kernel version (e.g. 6.18.2, 5.15.142). Must exist on kernel.org."
+        description: "Enter stable kernel version (e.g. 6.12.6, 5.15.142). Must exist on kernel.org."
         required: true
 
 jobs:
@@ -17,10 +17,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Initialize Arch Linux Keyring
+        run: |
+          # 初始化密钥环，防止因签名错误导致 pacman 安装失败
+          pacman-key --init
+          pacman-key --populate archlinux
+          pacman -Syu --noconfirm archlinux-keyring
+
       - name: Install build dependencies
         run: |
+          # 显式安装 rsync 和 kmod，并更新系统
           pacman -Syu --noconfirm base-devel git bc flex bison openssl libelf pahole wget tar xz curl \
-            ncurses zstd lz4 gmp rsync perl python3 elfutils cpio
+            ncurses zstd lz4 gmp rsync perl python3 elfutils cpio kmod
 
       - name: Download Linux source (Stable Only)
         run: |
@@ -45,6 +53,7 @@ jobs:
       - name: Build kernel
         run: |
           cd linux
+          # 使用所有核心编译
           make -j$(nproc) V=1
 
       - name: Convert bzImage to .img
@@ -56,6 +65,7 @@ jobs:
         run: |
           VERSION=${{ github.event.inputs.kernel_version }}
           cd linux
+          # rsync 在这一步是必须的
           make modules_install INSTALL_MOD_PATH=../modules-${VERSION}
           make headers_install INSTALL_HDR_PATH=../headers-${VERSION}
           cd ..
@@ -79,15 +89,19 @@ jobs:
       - name: Upload to 123 Cloud via WebDAV
         run: |
           VERSION=${{ github.event.inputs.kernel_version }}
-          curl -u "${{ secrets.WEBDAV_USER }}:${{ secrets.WEBDAV_PASS }}" \
+          # 使用 -f (fail) 使得 curl 在遇到错误时退出代码不为 0
+          curl -f -u "${{ secrets.WEBDAV_USER }}:${{ secrets.WEBDAV_PASS }}" \
             -T linux/arch/x86/boot/bzImage \
             "https://webdav.123pan.cn/webdav/arch/linux-${VERSION}-bzImage"
-          curl -u "${{ secrets.WEBDAV_USER }}:${{ secrets.WEBDAV_PASS }}" \
+          
+          curl -f -u "${{ secrets.WEBDAV_USER }}:${{ secrets.WEBDAV_PASS }}" \
             -T linux-${VERSION}.img \
             "https://webdav.123pan.cn/webdav/arch/linux-${VERSION}.img"
-          curl -u "${{ secrets.WEBDAV_USER }}:${{ secrets.WEBDAV_PASS }}" \
+          
+          curl -f -u "${{ secrets.WEBDAV_USER }}:${{ secrets.WEBDAV_PASS }}" \
             -T linux-${VERSION}-modules.tar.gz \
             "https://webdav.123pan.cn/webdav/arch/linux-${VERSION}-modules.tar.gz"
-          curl -u "${{ secrets.WEBDAV_USER }}:${{ secrets.WEBDAV_PASS }}" \
+          
+          curl -f -u "${{ secrets.WEBDAV_USER }}:${{ secrets.WEBDAV_PASS }}" \
             -T linux-${VERSION}-headers.tar.gz \
             "https://webdav.123pan.cn/webdav/arch/linux-${VERSION}-headers.tar.gz"
