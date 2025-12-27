@@ -2,7 +2,8 @@ name: Build Linux Kernel 6.18.2
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
   pull_request:
   workflow_dispatch:   # 手动触发
 
@@ -34,7 +35,7 @@ jobs:
           make -j$(nproc)
 
       - name: Upload bzImage artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: linux-6.18.2-bzImage
           path: linux/arch/x86/boot/bzImage
