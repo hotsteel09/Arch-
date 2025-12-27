@@ -19,7 +19,8 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          pacman -Syu --noconfirm base-devel git bc flex bison openssl libelf pahole wget tar xz curl
+          pacman -Syu --noconfirm base-devel git bc flex bison openssl libelf pahole wget tar xz curl \
+            ncurses zstd lz4 gmp
 
       - name: Download Linux source (Stable Only)
         run: |
@@ -44,14 +45,24 @@ jobs:
       - name: Build kernel
         run: |
           cd linux
-          make -j$(nproc)
+          make -j$(nproc) V=1
 
       - name: Convert bzImage to .img
         run: |
           VERSION=${{ github.event.inputs.kernel_version }}
           cp linux/arch/x86/boot/bzImage linux-${VERSION}.img
 
-      - name: Create Release and Upload bzImage & IMG
+      - name: Package modules and headers
+        run: |
+          VERSION=${{ github.event.inputs.kernel_version }}
+          cd linux
+          make modules_install INSTALL_MOD_PATH=../modules-${VERSION}
+          make headers_install INSTALL_HDR_PATH=../headers-${VERSION}
+          cd ..
+          tar -czf linux-${VERSION}-modules.tar.gz modules-${VERSION}
+          tar -czf linux-${VERSION}-headers.tar.gz headers-${VERSION}
+
+      - name: Create Release and Upload all artifacts
         uses: softprops/action-gh-release@v2
         with:
           tag_name: linux-${{ github.event.inputs.kernel_version }}
@@ -60,6 +71,8 @@ jobs:
           files: |
             linux/arch/x86/boot/bzImage
             linux-${{ github.event.inputs.kernel_version }}.img
+            linux-${{ github.event.inputs.kernel_version }}-modules.tar.gz
+            linux-${{ github.event.inputs.kernel_version }}-headers.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -72,3 +85,9 @@ jobs:
           curl -u "${{ secrets.WEBDAV_USER }}:${{ secrets.WEBDAV_PASS }}" \
             -T linux-${VERSION}.img \
             "https://webdav.123pan.cn/webdav/arch/linux-${VERSION}.img"
+          curl -u "${{ secrets.WEBDAV_USER }}:${{ secrets.WEBDAV_PASS }}" \
+            -T linux-${VERSION}-modules.tar.gz \
+            "https://webdav.123pan.cn/webdav/arch/linux-${VERSION}-modules.tar.gz"
+          curl -u "${{ secrets.WEBDAV_USER }}:${{ secrets.WEBDAV_PASS }}" \
+            -T linux-${VERSION}-headers.tar.gz \
+            "https://webdav.123pan.cn/webdav/arch/linux-${VERSION}-headers.tar.gz"
