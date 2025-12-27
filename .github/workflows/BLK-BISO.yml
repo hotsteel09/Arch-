@@ -1,4 +1,4 @@
-name: Build Linux Kernel & Build ISO Image
+name: Build Linux Kernel (Custom Config)
 
 on:
   workflow_dispatch:
@@ -168,14 +168,22 @@ jobs:
           VERSION="${{ github.event.inputs.kernel_version }}"
           cp -r /usr/share/archiso/configs/releng/ iso_profile
           cd iso_profile
-          # 替换为自定义内核
+          
+          # 1. 移除包列表里的官方内核
           sed -i '/^linux$/d' packages.x86_64
+          
+          # 2. 修复：创建目录并复制自定义内核
+          mkdir -p airootfs/boot/
           cp ../artifacts/linux-${VERSION}.bzImage airootfs/boot/vmlinuz-linux
-          # 注入模块
+          
+          # 3. 修复：清理无效符号链接并注入模块
           mkdir -p airootfs/usr/lib/modules/
+          find ../lib/modules/ -type l -delete
           cp -r ../lib/modules/* airootfs/usr/lib/modules/
-          # 运行构建
+          
+          # 4. 运行构建
           cd ..
+          # 注意：work_dir 不能在 iso_profile 内部
           mkarchiso -v -w work_dir -o out iso_profile
 
       - name: Upload ISO to Release
