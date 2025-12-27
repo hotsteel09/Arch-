@@ -20,7 +20,7 @@ jobs:
       - name: Install build dependencies
         run: |
           pacman -Syu --noconfirm base-devel git bc flex bison openssl libelf pahole wget tar xz curl \
-            ncurses zstd lz4 gmp
+            ncurses zstd lz4 gmp rsync perl python3 elfutils cpio
 
       - name: Download Linux source (Stable Only)
         run: |
