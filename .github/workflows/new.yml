@@ -1,10 +1,10 @@
-name: Build Linux Kernel (Custom Version)
+name: Build Linux Kernel (Stable Only)
 
 on:
   workflow_dispatch:
     inputs:
       kernel_version:
-        description: "Enter kernel version (e.g. 6.18.2, 6.19-rc2, 5.15.142). Must exist on kernel.org."
+        description: "Enter stable kernel version (e.g. 6.18.2, 5.15.142). Must exist on kernel.org."
         required: true
 
 jobs:
@@ -21,24 +21,18 @@ jobs:
         run: |
           pacman -Syu --noconfirm base-devel git bc flex bison openssl libelf pahole wget tar xz curl
 
-      - name: Download Linux source
+      - name: Download Linux source (Stable Only)
         run: |
           VERSION=${{ github.event.inputs.kernel_version }}
-          echo "Downloading kernel version: $VERSION"
+          echo "Downloading stable kernel version: $VERSION"
 
           MAJOR=$(echo $VERSION | cut -d. -f1)
+          URL="https://cdn.kernel.org/pub/linux/kernel/v${MAJOR}.x/linux-${VERSION}.tar.xz"
 
-          # 稳定版路径
-          STABLE_URL="https://cdn.kernel.org/pub/linux/kernel/v${MAJOR}.x/linux-${VERSION}.tar.xz"
-          # RC 测试版路径
-          TEST_URL="https://cdn.kernel.org/pub/linux/kernel/v${MAJOR}.x/testing/linux-${VERSION}.tar.xz"
-
-          if wget --spider $STABLE_URL 2>/dev/null; then
-            wget $STABLE_URL
-          elif wget --spider $TEST_URL 2>/dev/null; then
-            wget $TEST_URL
+          if wget --spider $URL 2>/dev/null; then
+            wget $URL
           else
-            echo "Kernel version ${VERSION} not found on kernel.org"
+            echo "Stable kernel version ${VERSION} not found on kernel.org"
             exit 1
           fi
 
@@ -46,7 +40,7 @@ jobs:
           mv linux-${VERSION} linux
           cd linux
           make defconfig
-          
+
       - name: Build kernel
         run: |
           cd linux
@@ -62,7 +56,7 @@ jobs:
         with:
           tag_name: linux-${{ github.event.inputs.kernel_version }}
           name: "Linux Kernel ${{ github.event.inputs.kernel_version }}"
-          body: "Automatically built Linux kernel version ${{ github.event.inputs.kernel_version }}."
+          body: "Automatically built stable Linux kernel version ${{ github.event.inputs.kernel_version }}."
           files: |
             linux/arch/x86/boot/bzImage
             linux-${{ github.event.inputs.kernel_version }}.img
