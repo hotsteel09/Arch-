@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       kernel_version:
-        description: "Enter kernel version (e.g. 6.18.2 or 6.19-rc2). Must exist on kernel.org."
+        description: "Enter kernel version (e.g. 6.18.2, 6.19-rc2, 5.15.142). Must exist on kernel.org."
         required: true
 
 jobs:
@@ -21,16 +21,34 @@ jobs:
         run: |
           pacman -Syu --noconfirm base-devel git bc flex bison openssl libelf pahole wget tar xz curl
 
-      - name: Check kernel source availability
-        run: |
-          VERSION=${{ github.event.inputs.kernel_version }}
-          echo "Checking kernel version: $VERSION"
-          wget --spider https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${VERSION}.tar.xz || exit 1
-
       - name: Download Linux source
         run: |
           VERSION=${{ github.event.inputs.kernel_version }}
-          wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${VERSION}.tar.xz
+          echo "Downloading kernel version: $VERSION"
+
+          # 提取主版本号 (例如 6.18.2 -> 6)
+          MAJOR=$(echo $VERSION | cut -d. -f1)
+
+          # 构造可能的路径
+          URLS=(
+            "https://cdn.kernel.org/pub/linux/kernel/v${MAJOR}.x/linux-${VERSION}.tar.xz"
+            "https://cdn.kernel.org/pub/linux/kernel/v${MAJOR}.x/testing/linux-${VERSION}.tar.xz"
+          )
+
+          FOUND=0
+          for url in "${URLS[@]}"; do
+            if wget --spider $url 2>/dev/null; then
+              wget $url
+              FOUND=1
+              break
+            fi
+          done
+
+          if [ $FOUND -eq 0 ]; then
+            echo "Kernel version ${VERSION} not found on kernel.org"
+            exit 1
+          fi
+
           tar -xf linux-${VERSION}.tar.xz
           mv linux-${VERSION} linux
           cd linux
