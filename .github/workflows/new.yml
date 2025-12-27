@@ -26,25 +26,18 @@ jobs:
           VERSION=${{ github.event.inputs.kernel_version }}
           echo "Downloading kernel version: $VERSION"
 
-          # 提取主版本号 (例如 6.18.2 -> 6)
           MAJOR=$(echo $VERSION | cut -d. -f1)
 
-          # 构造可能的路径
-          URLS=(
-            "https://cdn.kernel.org/pub/linux/kernel/v${MAJOR}.x/linux-${VERSION}.tar.xz"
-            "https://cdn.kernel.org/pub/linux/kernel/v${MAJOR}.x/testing/linux-${VERSION}.tar.xz"
-          )
+          # 稳定版路径
+          STABLE_URL="https://cdn.kernel.org/pub/linux/kernel/v${MAJOR}.x/linux-${VERSION}.tar.xz"
+          # RC 测试版路径
+          TEST_URL="https://cdn.kernel.org/pub/linux/kernel/v${MAJOR}.x/testing/linux-${VERSION}.tar.xz"
 
-          FOUND=0
-          for url in "${URLS[@]}"; do
-            if wget --spider $url 2>/dev/null; then
-              wget $url
-              FOUND=1
-              break
-            fi
-          done
-
-          if [ $FOUND -eq 0 ]; then
+          if wget --spider $STABLE_URL 2>/dev/null; then
+            wget $STABLE_URL
+          elif wget --spider $TEST_URL 2>/dev/null; then
+            wget $TEST_URL
+          else
             echo "Kernel version ${VERSION} not found on kernel.org"
             exit 1
           fi
@@ -53,7 +46,7 @@ jobs:
           mv linux-${VERSION} linux
           cd linux
           make defconfig
-
+          
       - name: Build kernel
         run: |
           cd linux
