@@ -1,4 +1,4 @@
-name: Build Linux Kernel (Custom Config)
+name: Build Linux Kernel & Installing ISO Build
 
 on:
   workflow_dispatch:
@@ -8,7 +8,6 @@ on:
         required: true
         default: "6.12.6"
       
-      # --- 五项关键配置 ---
       enable_bbr:
         description: "1. 启用 Google BBR TCP 拥塞控制"
         type: boolean
@@ -40,7 +39,7 @@ on:
         default: false
 
 jobs:
-  # --- 任务 1: 编译内核 (保留原代码逻辑) ---
+  # --- 任务 1: 编译内核 ---
   build:
     runs-on: ubuntu-latest
     container:
@@ -128,10 +127,6 @@ jobs:
           name: "Linux ${{ github.event.inputs.kernel_version }} (Custom Build)"
           body: |
             Custom build of Linux Kernel ${{ github.event.inputs.kernel_version }}
-            - BBR: ${{ github.event.inputs.enable_bbr }}
-            - KVM: ${{ github.event.inputs.enable_kvm }}
-            - NTFS3: ${{ github.event.inputs.enable_ntfs3 }}
-            - Low Latency: ${{ github.event.inputs.preempt_mode }}
           files: artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -144,7 +139,7 @@ jobs:
             artifacts/linux-${{ github.event.inputs.kernel_version }}.bzImage
             pkg_modules/
 
-  # --- 任务 2: 制作 Arch ISO (子工作流) ---
+  # --- 任务 2: 制作 Arch ISO ---
   make_iso:
     needs: build
     runs-on: ubuntu-latest
@@ -162,28 +157,35 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: kernel-data
+          path: ./downloaded_data
 
       - name: Build Custom ISO
         run: |
           VERSION="${{ github.event.inputs.kernel_version }}"
+          
+          # 准备配置文件
           cp -r /usr/share/archiso/configs/releng/ iso_profile
           cd iso_profile
           
-          # 1. 移除包列表里的官方内核
+          # 1. 移除官方内核
           sed -i '/^linux$/d' packages.x86_64
           
-          # 2. 修复：创建目录并复制自定义内核
+          # 2. 动态寻找内核文件并建立目录
           mkdir -p airootfs/boot/
-          cp ../artifacts/linux-${VERSION}.bzImage airootfs/boot/vmlinuz-linux
+          KERNEL_SRC=$(find ../downloaded_data -name "linux-${VERSION}.bzImage" | head -n 1)
+          cp "$KERNEL_SRC" airootfs/boot/vmlinuz-linux
           
-          # 3. 修复：清理无效符号链接并注入模块
+          # 3. 动态寻找并注入模块
           mkdir -p airootfs/usr/lib/modules/
-          find ../lib/modules/ -type l -delete
-          cp -r ../lib/modules/* airootfs/usr/lib/modules/
+          # 找到包含 modules 的实际路径 (通常是 lib/modules/x.y.z)
+          MODULES_BASE=$(find ../downloaded_data -path "*/lib/modules" -type d | head -n 1)
           
-          # 4. 运行构建
+          # 清除无效链接并拷贝
+          find "$MODULES_BASE" -type l -delete
+          cp -r "$MODULES_BASE"/* airootfs/usr/lib/modules/
+          
+          # 4. 构建 ISO
           cd ..
-          # 注意：work_dir 不能在 iso_profile 内部
           mkarchiso -v -w work_dir -o out iso_profile
 
       - name: Upload ISO to Release
