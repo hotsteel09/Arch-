@@ -164,11 +164,12 @@ jobs:
           cp -r /usr/share/archiso/configs/releng/ iso_profile
           cd iso_profile
           
-          # 1. 移除官方内核
+          # 1. 移除官方内核包
           sed -i '/^linux$/d' packages.x86_64
           
-          # 2. 修改压缩算法为 zstd (更省内存，且比 xz 更快)
-          sed -i 's/airootfs_compression="xz"/airootfs_compression="zstd"/' profiledef.sh
+          # 2. 暴力全局替换压缩算法为 zstd，确保不漏掉任何配置项
+          find . -type f -exec sed -i 's/compression="xz"/compression="zstd"/g' {} +
+          find . -type f -exec sed -i 's/airootfs_compression="xz"/airootfs_compression="zstd"/g' {} +
           
           # 3. 动态寻找内核文件并复制
           mkdir -p airootfs/boot/
@@ -181,9 +182,9 @@ jobs:
           find "$MODULES_BASE" -type l -delete
           cp -r "$MODULES_BASE"/* airootfs/usr/lib/modules/
           
-          # 5. 构建 ISO (限制处理器数量为 2，防止内存溢出)
+          # 5. 核心保命参数：单线程 + 2GB 内存上限 + 强制 zstd
           cd ..
-          export MKSQUASHFS_OPTIONS="-processors 2"
+          export MKSQUASHFS_OPTIONS="-comp zstd -mem 2G -processors 1"
           mkarchiso -v -w work_dir -o out iso_profile
 
       - name: Upload ISO to Release
