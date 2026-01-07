@@ -39,3 +39,33 @@ jobs:
         with:
           name: linux-6.18.2-bzImage
           path: linux/arch/x86/boot/bzImage
+
+      - name: Create Release and Upload all artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: linux-${{ github.event.inputs.kernel_version }}
+          name: "Linux Kernel ${{ github.event.inputs.kernel_version }}"
+          body: "Automatically built stable Linux kernel version ${{ github.event.inputs.kernel_version }}."
+          files: |
+            linux/arch/x86/boot/bzImage
+            linux-${{ github.event.inputs.kernel_version }}.img
+            linux-${{ github.event.inputs.kernel_version }}-modules.tar.gz
+            linux-${{ github.event.inputs.kernel_version }}-headers.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload to 123 Cloud via WebDAV
+        run: |
+          VERSION=${{ github.event.inputs.kernel_version }}
+          curl -u "${{ secrets.WEBDAV_USER }}:${{ secrets.WEBDAV_PASS }}" \
+            -T linux/arch/x86/boot/bzImage \
+            "https://webdav.123pan.cn/webdav/arch/linux-${VERSION}-bzImage"
+          curl -u "${{ secrets.WEBDAV_USER }}:${{ secrets.WEBDAV_PASS }}" \
+            -T linux-${VERSION}.img \
+            "https://webdav.123pan.cn/webdav/arch/linux-${VERSION}.img"
+          curl -u "${{ secrets.WEBDAV_USER }}:${{ secrets.WEBDAV_PASS }}" \
+            -T linux-${VERSION}-modules.tar.gz \
+            "https://webdav.123pan.cn/webdav/arch/linux-${VERSION}-modules.tar.gz"
+          curl -u "${{ secrets.WEBDAV_USER }}:${{ secrets.WEBDAV_PASS }}" \
+            -T linux-${VERSION}-headers.tar.gz \
+            "https://webdav.123pan.cn/webdav/arch/linux-${VERSION}-headers.tar.gz"
